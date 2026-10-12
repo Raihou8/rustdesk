@@ -575,6 +575,12 @@ List<TTextMenu> toolbarControls(BuildContext context, String id, FFI ffi) {
       onPressed: () => sessionRefreshVideo(sessionId, pi),
     ));
   }
+  if (ffi.connType == ConnType.defaultConn || ffi.connType == ConnType.viewCamera) {
+    v.add(TTextMenu(
+      child: Text(translate('Image sharpening')),
+      onPressed: () => imageSharpeningDialog(sessionId, ffi),
+    ));
+  }
   // record
   if (!(isDesktop || isWeb) &&
       bind.mainGetLocalOption(key: kOptionHideRecordingButton) != 'Y' &&

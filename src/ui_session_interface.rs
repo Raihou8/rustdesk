@@ -270,6 +270,18 @@ impl<T: InvokeUiSession> Session<T> {
         self.lc.read().unwrap().custom_image_quality.clone()
     }
 
+    pub fn get_image_sharpening(&self) -> i32 {
+        self.lc.read().unwrap().get_image_sharpening()
+    }
+
+    pub fn set_image_sharpening(&self, v: String) {
+        self.lc
+            .write()
+            .unwrap()
+            .set_option(base::config::keys::OPTION_IMAGE_SHARPENING.to_owned(), v);
+        self.send(Data::Message(LoginConfigHandler::refresh()));
+    }
+
     pub fn get_peer_version(&self) -> i64 {
         self.lc.read().unwrap().version.clone()
     }

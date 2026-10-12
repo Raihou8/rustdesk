@@ -507,6 +507,8 @@ impl sciter::EventHandler for SciterSession {
         fn get_id();
         fn get_default_pi();
         fn get_option(String);
+        fn get_image_sharpening();
+        fn set_image_sharpening(String);
         fn get_local_option(String);
         fn t(String);
         fn set_option(String, String);

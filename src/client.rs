@@ -2668,6 +2668,7 @@ pub struct VideoHandler {
     _display: usize, // useful for debug
     fail_counter: usize,
     first_frame: bool,
+    sharpen_buffer: Vec<u8>,
 }
 
 impl VideoHandler {
@@ -2700,6 +2701,7 @@ impl VideoHandler {
             _display,
             fail_counter: 0,
             first_frame: true,
+            sharpen_buffer: Vec::new(),
         }
     }
 
@@ -3633,6 +3635,16 @@ impl LoginConfigHandler {
         }
     }
 
+    pub fn get_image_sharpening(&self) -> i32 {
+        let stored = self
+            .config
+            .options
+            .get(keys::OPTION_IMAGE_SHARPENING)
+            .map(|v| v.as_str())
+            .unwrap_or("");
+        parse_image_sharpening(stored).unwrap_or(DEFAULT_IMAGE_SHARPENING)
+    }
+
     #[inline]
     pub fn get_custom_resolution(&self, display: i32) -> Option<(i32, i32)> {
         self.config
@@ -3983,6 +3995,82 @@ impl LoginConfigHandler {
     }
 }
 
+const DEFAULT_IMAGE_SHARPENING: i32 = 0;
+const MAX_IMAGE_SHARPENING: i32 = 100;
+
+fn normalize_image_sharpening(value: i32) -> i32 {
+    value.clamp(DEFAULT_IMAGE_SHARPENING, MAX_IMAGE_SHARPENING)
+}
+
+fn parse_image_sharpening(value: &str) -> Option<i32> {
+    value.parse::<i32>().ok().map(normalize_image_sharpening)
+}
+
+#[inline]
+fn rgba_bytes_per_row(rgb: &ImageRgb) -> usize {
+    let bytes_per_pixel = match rgb.fmt() {
+        ImageFormat::Raw => 3,
+        ImageFormat::ARGB | ImageFormat::ABGR => 4,
+    };
+    (rgb.w * bytes_per_pixel + rgb.align() - 1) & !(rgb.align() - 1)
+}
+
+fn apply_image_sharpening(rgb: &mut ImageRgb, scratch: &mut Vec<u8>, strength: i32) {
+    if rgb.w < 3 || rgb.h < 3 {
+        return;
+    }
+    if !matches!(rgb.fmt(), ImageFormat::ARGB | ImageFormat::ABGR) {
+        return;
+    }
+    let strength = normalize_image_sharpening(strength);
+    if strength <= 0 {
+        return;
+    }
+
+    let stride = rgba_bytes_per_row(rgb);
+    let width = rgb.w;
+    let height = rgb.h;
+    scratch.clear();
+    scratch.extend_from_slice(&rgb.raw);
+    let src = scratch.as_slice();
+    let dst = &mut rgb.raw;
+
+    const CHANNELS: usize = 4;
+    const THRESHOLD: i32 = 8;
+    let amount_numerator = strength;
+    let amount_denominator = 100;
+
+    for y in 1..height - 1 {
+        let row = y * stride;
+        let prev = (y - 1) * stride;
+        let next = (y + 1) * stride;
+        for x in 1..width - 1 {
+            let px = row + x * CHANNELS;
+            let left = px - CHANNELS;
+            let right = px + CHANNELS;
+            let up = prev + x * CHANNELS;
+            let down = next + x * CHANNELS;
+
+            for channel in 0..3 {
+                let center = src[px + channel] as i32;
+                let delta = center * 4
+                    - src[left + channel] as i32
+                    - src[right + channel] as i32
+                    - src[up + channel] as i32
+                    - src[down + channel] as i32;
+
+                if delta.abs() < THRESHOLD {
+                    continue;
+                }
+
+                let sharpened =
+                    center + (delta * amount_numerator + amount_denominator / 2) / amount_denominator;
+                dst[px + channel] = sharpened.clamp(0, 255) as u8;
+            }
+        }
+    }
+}
+
 /// Media data.
 pub enum MediaData {
     VideoQueue,
@@ -4068,6 +4156,15 @@ pub fn start_video_thread<F, T>(
                             let format_changed = handler.decoder.format() != format;
                             match handler.handle_frame(vf, &mut pixelbuffer, &mut tmp_chroma) {
                                 Ok(true) => {
+                                    let sharpening =
+                                        session.lc.read().unwrap().get_image_sharpening();
+                                    if pixelbuffer && sharpening > 0 {
+                                        apply_image_sharpening(
+                                            &mut handler.rgb,
+                                            &mut handler.sharpen_buffer,
+                                            sharpening,
+                                        );
+                                    }
                                     video_callback(
                                         display,
                                         &mut handler.rgb,
@@ -5425,6 +5522,69 @@ pub mod peer_online {
 
             assert!(Client::is_expected_webrtc_ice_candidate(&ice, "session-a"));
             assert!(!Client::is_expected_webrtc_ice_candidate(&ice, "session-b"));
+        }
+
+        #[test]
+        fn test_image_sharpening_preserves_alpha_and_edges() {
+            let mut rgb = super::super::ImageRgb::new(super::super::ImageFormat::ABGR, 64);
+            rgb.w = 3;
+            rgb.h = 3;
+            let stride = super::super::rgba_bytes_per_row(&rgb);
+            rgb.raw.resize(rgb.h * stride, 0);
+
+            for y in 0..rgb.h {
+                for x in 0..rgb.w {
+                    let i = y * stride + x * 4;
+                    rgb.raw[i] = 100;
+                    rgb.raw[i + 1] = 100;
+                    rgb.raw[i + 2] = 100;
+                    rgb.raw[i + 3] = 77;
+                }
+            }
+
+            let center = stride + 4;
+            rgb.raw[center] = 140;
+            rgb.raw[center + 1] = 140;
+            rgb.raw[center + 2] = 140;
+
+            let original_corner = rgb.raw[0..4].to_vec();
+            let mut scratch = Vec::new();
+            super::super::apply_image_sharpening(&mut rgb, &mut scratch, 100);
+
+            assert!(rgb.raw[center] > 140);
+            assert!(rgb.raw[center + 1] > 140);
+            assert!(rgb.raw[center + 2] > 140);
+            assert_eq!(rgb.raw[center + 3], 77);
+            assert_eq!(&rgb.raw[0..4], original_corner.as_slice());
+        }
+
+        #[test]
+        fn test_image_sharpening_zero_strength_is_noop() {
+            let mut rgb = super::super::ImageRgb::new(super::super::ImageFormat::ABGR, 64);
+            rgb.w = 3;
+            rgb.h = 3;
+            let stride = super::super::rgba_bytes_per_row(&rgb);
+            rgb.raw.resize(rgb.h * stride, 90);
+            let before = rgb.raw.clone();
+            let mut scratch = Vec::new();
+            super::super::apply_image_sharpening(&mut rgb, &mut scratch, 0);
+            assert_eq!(rgb.raw, before);
+        }
+
+        #[test]
+        fn test_image_sharpening_option_roundtrip() {
+            let default_handler = super::super::LoginConfigHandler::default();
+            assert_eq!(
+                default_handler.get_image_sharpening(),
+                super::super::DEFAULT_IMAGE_SHARPENING
+            );
+
+            let mut handler = super::super::LoginConfigHandler::default();
+            handler.config.options.insert(
+                super::super::keys::OPTION_IMAGE_SHARPENING.to_owned(),
+                "35".to_owned(),
+            );
+            assert_eq!(handler.get_image_sharpening(), 35);
         }
 
         #[tokio::test]

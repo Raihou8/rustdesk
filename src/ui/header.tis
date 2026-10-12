@@ -200,6 +200,11 @@ class Header: Reactor.Component {
                 <li #balanced type="image-quality"><span>{svg_checkmark}</span>{translate('Balanced')}</li> 
                 <li #low type="image-quality"><span>{svg_checkmark}</span>{translate('Optimize reaction time')}</li> 
                 <li #custom type="image-quality"><span>{svg_checkmark}</span>{translate('Custom')}</li>
+                <li #image-sharpening><span>{svg_checkmark}</span>{translate('Image sharpening')}...</li>
+                <li #image-sharpening-off type="image-sharpening-preset"><span>{svg_checkmark}</span>{translate('Image sharpening')}: {translate('Off')}</li>
+                <li #image-sharpening-low type="image-sharpening-preset"><span>{svg_checkmark}</span>{translate('Image sharpening')}: {translate('Low')}</li>
+                <li #image-sharpening-medium type="image-sharpening-preset"><span>{svg_checkmark}</span>{translate('Image sharpening')}: {translate('Medium')}</li>
+                <li #image-sharpening-high type="image-sharpening-preset"><span>{svg_checkmark}</span>{translate('Image sharpening')}: {translate('High')}</li>
                 {show_codec ? <div>
                 <div .separator />
                 <li #auto type="codec-preference"><span>{svg_checkmark}</span>Auto</li>
@@ -409,6 +414,12 @@ class Header: Reactor.Component {
     event click $(menu#display-options li) (_, me) {
         if (me.id == "custom") {
             handle_custom_image_quality();
+        } else if (me.id == "image-sharpening") {
+            self.timer(60ms, function() {
+                handle_image_sharpening();
+            });
+        } else if (me.attributes["type"] == "image-sharpening-preset") {
+            set_image_sharpening_preset(me.id);
         } else if (me.id == "privacy-mode") {
             togglePrivacyMode(me.id);
         } else if (me.id == "show-quality-monitor") {
@@ -483,6 +494,9 @@ function toggleMenuState() {
     var c = handler.get_option("codec-preference");
     if (!c) c = "auto";
     values.push(c);
+    var sharpen = safeGetImageSharpening();
+    if (sharpen > 0) values.push("image-sharpening");
+    values.push(image_sharpening_preset_id(sharpen));
     for (var el in $$(menu#display-options li)) {
         el.attributes.toggleClass("selected", values.indexOf(el.id) >= 0);
     }
@@ -496,6 +510,68 @@ function toggleMenuState() {
             el.attributes.toggleClass("selected", value);
         }
     }
+}
+
+function safeGetImageSharpening() {
+    var value = 0;
+    try {
+        value = handler.get_image_sharpening();
+    } catch (e) {
+        try {
+            value = handler.get_option("image-sharpening") || "0";
+        } catch (_) {
+            value = 0;
+        }
+    }
+    value = ("" + value).toInteger() || 0;
+    return value;
+}
+
+function safeSetImageSharpening(value) {
+    try {
+        handler.set_image_sharpening(value);
+    } catch (e) {
+        handler.set_option("image-sharpening", value);
+        handler.refresh_video(0);
+    }
+}
+
+function image_sharpening_preset_id(value) {
+    value = ("" + value).toInteger() || 0;
+    if (value <= 0) return "image-sharpening-off";
+    if (value <= 35) return "image-sharpening-low";
+    if (value <= 70) return "image-sharpening-medium";
+    return "image-sharpening-high";
+}
+
+function set_image_sharpening_preset(id) {
+    var value = "0";
+    if (id == "image-sharpening-low") value = "30";
+    else if (id == "image-sharpening-medium") value = "60";
+    else if (id == "image-sharpening-high") value = "90";
+    safeSetImageSharpening(value);
+    toggleMenuState();
+}
+
+function handle_image_sharpening() {
+    var value = safeGetImageSharpening();
+    msgbox("custom-image-sharpening", "Image sharpening", <div .form>
+        <div>{translate("Image sharpening tip")}</div>
+        <div style="margin-top: 1em; flow: horizontal; vertical-align: middle;">
+            <input #sharpen-slider type="hslider" style="width: 300px;" name="amount" max="100" min="0" value={value} />
+            <b #sharpen-buddy style="display: inline-block; width: 36px; text-align: right;">{value}</b>
+        </div>
+    </div>, "", function(res=null) {
+        if (!res) return;
+        if (res.amount == null || res.amount == undefined) return;
+        safeSetImageSharpening("" + res.amount);
+        toggleMenuState();
+    }, 220);
+}
+
+event change $(#msgbox input#sharpen-slider) (_, el) {
+    var buddy = $(#msgbox b#sharpen-buddy);
+    if (buddy) buddy.text = "" + el.value;
 }
 
 if (is_osx) {

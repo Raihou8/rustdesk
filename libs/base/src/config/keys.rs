@@ -17,6 +17,7 @@ pub const OPTION_DISABLE_CLIPBOARD: &str = "disable_clipboard";
 pub const OPTION_LOCK_AFTER_SESSION_END: &str = "lock_after_session_end";
 pub const OPTION_PRIVACY_MODE: &str = "privacy_mode";
 pub const OPTION_TOUCH_MODE: &str = "touch-mode";
+pub const OPTION_IMAGE_SHARPENING: &str = "image-sharpening";
 pub const OPTION_SYNC_INIT_CLIPBOARD: &str = "sync-init-clipboard";
 pub const OPTION_THEME: &str = "theme";
 pub const OPTION_REMOTE_MENUBAR_DRAG_LEFT: &str = "remote-menubar-drag-left";
